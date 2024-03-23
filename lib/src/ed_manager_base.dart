@@ -2,16 +2,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:ed_manager/src/enum/data_type.dart';
-import 'package:ed_manager/src/extension/bool_extension.dart';
 import 'package:ed_manager/src/extension/data_type_extension.dart';
-import 'package:ed_manager/src/extension/int_extension.dart';
 
-final class EncodeDecodeManager {
+class EncodeDecodeManager {
   final Map<String, dynamic> data;
 
   EncodeDecodeManager(this.data);
 
-  /// The [encode] method returns you a List<int> value by separating the Map type [data] object you provide from outside into bytes.
   List<int> encode() {
     var byteBuffer = BytesBuilder();
     _encodeValue(data, byteBuffer);
@@ -21,40 +18,38 @@ final class EncodeDecodeManager {
   void _encodeValue(dynamic value, BytesBuilder byteBuffer) {
     if (value is int) {
       byteBuffer.addByte(DataType.intType.marker);
-      byteBuffer.add(byteDataFromInt(value));
+      byteBuffer.add(intToVarint(value));
     } else if (value is double) {
       byteBuffer.addByte(DataType.doubleType.marker);
-      byteBuffer.add(byteDataFromDouble(value));
+      var scaledIntBytes = doubleToScaledInt(value);
+      byteBuffer.add(scaledIntBytes);
     } else if (value is String) {
       byteBuffer.addByte(DataType.stringType.marker);
       var bytes = utf8.encode(value);
-      byteBuffer.add(byteDataFromInt(bytes.length));
+      byteBuffer.add(intToVarint(bytes.length));
       byteBuffer.add(bytes);
     } else if (value is List) {
       byteBuffer.addByte(DataType.listType.marker);
-      byteBuffer.add(byteDataFromInt(value.length));
+      byteBuffer.add(intToVarint(value.length));
       for (var element in value) {
         _encodeValue(element, byteBuffer);
       }
     } else if (value is Map) {
       byteBuffer.addByte(DataType.mapType.marker);
-      byteBuffer.add(byteDataFromInt(value.length));
+      byteBuffer.add(intToVarint(value.length));
       value.forEach((key, val) {
-        if (key is! String) {
-          throw FormatException("Incorrect key!");
-        }
+        if (key is! String) throw FormatException("Incorrect key!");
         _encodeValue(key, byteBuffer);
         _encodeValue(val, byteBuffer);
       });
     } else if (value is bool) {
       byteBuffer.addByte(DataType.boolType.marker);
-      byteBuffer.add(byteDataFromInt(value.toInt));
+      byteBuffer.addByte(value ? 1 : 0);
     } else {
-      throw FormatException("Incorrect key: ${value.runtimeType}");
+      throw FormatException("Unsupported type: ${value.runtimeType}");
     }
   }
 
-  /// The [decode] method divides the List<int> type [encodedData] object you provide externally into bytes, decodes them and returns the appropriate values ​​to you.
   dynamic decode(List<int> encodedData) {
     var byteData = ByteData.sublistView(Uint8List.fromList(encodedData));
     int readPosition = 0;
@@ -69,22 +64,26 @@ final class EncodeDecodeManager {
     dynamic value;
     switch (dataType) {
       case DataType.intType:
-        value = byteData.getInt32(position, Endian.little);
-        position += 4;
+        var result = varintToInt(byteData, position);
+        value = result.value;
+        position += result.bytesUsed;
         break;
       case DataType.doubleType:
-        value = byteData.getFloat64(position, Endian.little);
-        position += 8;
+        var intResult = varintToInt(byteData, position);
+        value = scaledIntToDouble(intResult.value);
+        position += intResult.bytesUsed;
         break;
       case DataType.stringType:
-        int length = byteData.getInt32(position, Endian.little);
-        position += 4;
+        var lengthResult = varintToInt(byteData, position);
+        int length = lengthResult.value;
+        position += lengthResult.bytesUsed;
         value = utf8.decode(byteData.buffer.asUint8List(position, length));
         position += length;
         break;
       case DataType.listType:
-        int length = byteData.getInt32(position, Endian.little);
-        position += 4;
+        var lengthResult = varintToInt(byteData, position);
+        int length = lengthResult.value;
+        position += lengthResult.bytesUsed;
         List<dynamic> list = [];
         for (int i = 0; i < length; i++) {
           var element = _decodeValue(byteData, () => position, (newPosition) => position = newPosition);
@@ -93,8 +92,9 @@ final class EncodeDecodeManager {
         value = list;
         break;
       case DataType.mapType:
-        int length = byteData.getInt32(position, Endian.little);
-        position += 4;
+        var lengthResult = varintToInt(byteData, position);
+        int length = lengthResult.value;
+        position += lengthResult.bytesUsed;
         Map<String, dynamic> map = {};
         for (int i = 0; i < length; i++) {
           String key = _decodeValue(byteData, () => position, (newPosition) => position = newPosition);
@@ -104,8 +104,8 @@ final class EncodeDecodeManager {
         value = map;
         break;
       case DataType.boolType:
-        value = byteData.getInt32(position, Endian.little).toBool;
-        position += 4;
+        value = byteData.getUint8(position) != 0;
+        position += 1;
         break;
       default:
         throw FormatException("Incorrect Type");
@@ -115,15 +115,53 @@ final class EncodeDecodeManager {
     return value;
   }
 
-  List<int> byteDataFromInt(int value) {
-    var buffer = ByteData(4);
-    buffer.setInt32(0, value, Endian.little);
-    return buffer.buffer.asUint8List();
-  }
-
   List<int> byteDataFromDouble(double value) {
     var buffer = ByteData(8);
     buffer.setFloat64(0, value, Endian.little);
     return buffer.buffer.asUint8List();
   }
+
+  /// variable-length integer calculation
+  List<int> intToVarint(int value) {
+    List<int> bytes = [];
+    while (value >= 128) {
+      bytes.add((value & 127) | 128);
+      value >>= 7;
+    }
+    bytes.add(value & 127);
+    return bytes;
+  }
+
+  /// variable-length integer calculation
+  VarintResult varintToInt(ByteData byteData, int position) {
+    int value = 0;
+    int shift = 0;
+    int bytesRead = 0;
+    while (true) {
+      int byte = byteData.getUint8(position + bytesRead);
+      bytesRead++;
+      value |= (byte & 127) << shift;
+      if ((byte & 128) == 0) {
+        break;
+      }
+      shift += 7;
+    }
+    return VarintResult(value, bytesRead);
+  }
+
+  List<int> doubleToScaledInt(double value, {int scale = 1000}) {
+    int scaledValue = (value * scale).round();
+    return intToVarint(scaledValue);
+  }
+
+  double scaledIntToDouble(int scaledValue, {int scale = 1000}) {
+    return scaledValue / scale;
+  }
+}
+
+class VarintResult {
+  final int value;
+  final int bytesUsed;
+
+  VarintResult(this.value, this.bytesUsed);
 }
