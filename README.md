@@ -20,7 +20,7 @@ To use ED Manager in your Dart project, add it to your project's pubspec.yaml fi
 
 ```
   dependencies:
-    ed_manager: ^1.0.0
+    ed_manager: <latest_version>
 ```
 
 Then, run the following command to install the package:

@@ -1,3 +1,7 @@
+## 1.0.2
+
+- Readme Update.
+
 ## 1.0.1
 
 - Byte Optimization.
