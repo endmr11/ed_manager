@@ -2,6 +2,8 @@
 
 ED Manager is a Dart package designed to efficiently encode and decode complex data structures into a compact binary format. This utility is particularly useful for applications that need to serialize and deserialize data with high performance and minimal footprint, such as data storage, network transmission, and inter-process communication.
 
+## Who made it? It's Eren ;)
+
 [![pubdev](https://img.shields.io/badge/pub-ed_manager-blue)](https://pub.dev/packages/ed_manager)
 
 ## Features
